@@ -1,0 +1,13 @@
+.venv/
+.env
+__pycache__/
+.pytest_cache/
+output/
+samples/
+*.pyc
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+*.m4v
