@@ -14,22 +14,11 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOGO = ROOT / "logos" / "kult.png"
 SIZE = 640
 MAX_DURATION = 60
+LOGO_FRACTION = 0.24
 
 
 class MediaError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class Variant:
-    name: str
-    label: str
-    fraction: float
-
-
-VARIANTS = (
-    Variant("small", "Small · 24%", 0.24),
-)
 
 
 @dataclass(frozen=True)
@@ -38,13 +27,6 @@ class VideoInfo:
     width: int
     height: int
     has_audio: bool
-
-
-@dataclass(frozen=True)
-class RenderedVideo:
-    path: Path
-    variant: Variant
-    duration: float
 
 
 def check_tools() -> None:
@@ -103,10 +85,9 @@ def logo_position(width: int, height: int, size: int = SIZE) -> tuple[int, int]:
     return x, y
 
 
-def prepare_overlay(logo_path: Path, destination: Path, variant: Variant,
-                    size: int = SIZE) -> tuple[int, int]:
+def prepare_overlay(logo_path: Path, destination: Path, size: int = SIZE) -> tuple[int, int]:
     supersampling = 2
-    width = round(size * variant.fraction) * supersampling
+    width = round(size * LOGO_FRACTION) * supersampling
     with Image.open(logo_path) as original:
         logo = original.convert("RGBA")
     bounds = logo.getbbox()
@@ -129,15 +110,12 @@ def prepare_overlay(logo_path: Path, destination: Path, variant: Variant,
     return logo_position(overlay.width, overlay.height, size * supersampling)
 
 
-async def render_variant(source: Path, logo: Path, output_dir: Path,
-                         variant: Variant, info: VideoInfo,
-                         max_duration: float = MAX_DURATION) -> RenderedVideo:
-    if not 0 < max_duration <= MAX_DURATION:
-        raise ValueError("Duration must be greater than 0 and at most 60 seconds.")
+async def render(source: Path, logo: Path, output_dir: Path, info: VideoInfo,
+                 max_duration: float = MAX_DURATION) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    overlay = output_dir / f"logo-{variant.name}.png"
-    x, y = prepare_overlay(logo, overlay, variant)
-    output = output_dir / f"kultura-{variant.name}.mp4"
+    overlay = output_dir / "logo.png"
+    x, y = prepare_overlay(logo, overlay)
+    output = output_dir / "kultura.mp4"
     duration = min(info.duration, max_duration)
     filters = (
         "[0:V:0]setpts=PTS-STARTPTS,"
@@ -160,4 +138,4 @@ async def render_variant(source: Path, logo: Path, output_dir: Path,
     )
     if output.stat().st_size > 49_000_000:
         raise MediaError("The output file is too large to send.")
-    return RenderedVideo(output, variant, duration)
+    return output

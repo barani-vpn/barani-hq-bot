@@ -7,8 +7,8 @@ from PIL import Image
 import pytest
 
 from kultura_bot.media import (
-    DEFAULT_LOGO, SIZE, VARIANTS, MediaError, logo_position,
-    prepare_overlay, probe_video, render_variant,
+    DEFAULT_LOGO, SIZE, MediaError, logo_position,
+    prepare_overlay, probe_video, render,
 )
 
 
@@ -24,16 +24,14 @@ def video(tmp_path_factory):
     return source
 
 
-@pytest.mark.parametrize("variant", VARIANTS, ids=lambda v: v.name)
-def test_render_playable_square_with_audio(video, tmp_path, variant):
+def test_render_playable_square_with_audio(video, tmp_path):
     async def run():
         info = await probe_video(video)
-        return await render_variant(video, DEFAULT_LOGO, tmp_path, variant, info,
-                                    max_duration=0.7)
+        return await render(video, DEFAULT_LOGO, tmp_path, info, max_duration=0.7)
     rendered = asyncio.run(run())
     raw = subprocess.check_output([
         "ffprobe", "-v", "error", "-show_streams", "-show_format",
-        "-of", "json", str(rendered.path),
+        "-of", "json", str(rendered),
     ])
     data = json.loads(raw)
     visual = next(s for s in data["streams"] if s["codec_type"] == "video")
@@ -44,10 +42,10 @@ def test_render_playable_square_with_audio(video, tmp_path, variant):
     assert visual["avg_frame_rate"] == "30/1"
     assert audio["codec_name"] == "aac"
     assert 0.65 <= float(data["format"]["duration"]) <= 0.8
-    content = rendered.path.read_bytes()
+    content = rendered.read_bytes()
     assert content.index(b"moov") < content.index(b"mdat")
     frame = subprocess.check_output([
-        "ffmpeg", "-v", "error", "-i", str(rendered.path), "-frames:v", "1",
+        "ffmpeg", "-v", "error", "-i", str(rendered), "-frames:v", "1",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ])
     reference = subprocess.check_output([
@@ -74,18 +72,17 @@ def test_rectangular_silent_input(tmp_path, dimensions):
     async def run():
         info = await probe_video(source)
         assert not info.has_audio
-        result = await render_variant(source, DEFAULT_LOGO, tmp_path, VARIANTS[0], info)
-        return await probe_video(result.path)
+        result = await render(source, DEFAULT_LOGO, tmp_path, info)
+        return await probe_video(result)
 
     result = asyncio.run(run())
     assert result.width == result.height == SIZE
     assert not result.has_audio
 
 
-@pytest.mark.parametrize("variant", VARIANTS, ids=lambda v: v.name)
-def test_logo_stays_inside_circle_with_antialiasing(tmp_path, variant):
+def test_logo_stays_inside_circle_with_antialiasing(tmp_path):
     path = tmp_path / "overlay.png"
-    x, y = prepare_overlay(DEFAULT_LOGO, path, variant)
+    x, y = prepare_overlay(DEFAULT_LOGO, path)
     with Image.open(path) as overlay:
         assert overlay.mode == "RGBA"
         assert logo_position(overlay.width, overlay.height, SIZE * 2) == (x, y)

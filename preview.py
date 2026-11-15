@@ -2,7 +2,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from kultura_bot.media import DEFAULT_LOGO, VARIANTS, check_tools, probe_video, render_variant
+from kultura_bot.media import DEFAULT_LOGO, check_tools, probe_video, render
 
 
 async def main() -> None:
@@ -13,9 +13,7 @@ async def main() -> None:
     args = parser.parse_args()
     check_tools()
     info = await probe_video(args.video)
-    for variant in VARIANTS:
-        result = await render_variant(args.video, args.logo, args.output, variant, info)
-        print(f"{variant.label}: {result.path.resolve()}")
+    print((await render(args.video, args.logo, args.output, info)).resolve())
 
 
 if __name__ == "__main__":

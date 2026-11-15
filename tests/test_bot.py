@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from kultura_bot import __main__ as app
-from kultura_bot.media import RenderedVideo, VARIANTS, VideoInfo
+from kultura_bot.media import VideoInfo
 
 
 def make_message(user_id=123, size=100):
@@ -29,23 +29,21 @@ def test_sends_one_video_note_and_cleans_files(monkeypatch):
         destination.write_bytes(b"video")
         paths.append(destination)
 
-    async def render(source, logo, output, variant, info):
-        result = output / f"{variant.name}.mp4"
+    async def render(source, logo, output, info):
+        result = output / "out.mp4"
         result.write_bytes(b"rendered")
         paths.append(result)
-        return RenderedVideo(result, variant, 2.0)
+        return result
 
     monkeypatch.setattr(app, "probe_video", AsyncMock(return_value=VideoInfo(2, 640, 640, True)))
-    renderer = AsyncMock(side_effect=render)
-    monkeypatch.setattr(app, "render_variant", renderer)
+    monkeypatch.setattr(app, "render", AsyncMock(side_effect=render))
     bot = SimpleNamespace(download=AsyncMock(side_effect=download))
     asyncio.run(get_handler(app.make_router(set()))(message, bot))
     message.reply_video_note.assert_awaited_once()
-    assert [call.args[3] for call in renderer.await_args_list] == list(VARIANTS)
-    for call in message.reply_video_note.await_args_list:
-        assert call.kwargs["length"] == 640
-        assert call.kwargs["duration"] == 2
-        assert Path(call.kwargs["video_note"].path) in paths
+    call = message.reply_video_note.await_args
+    assert call.kwargs["length"] == 640
+    assert call.kwargs["duration"] == 2
+    assert Path(call.kwargs["video_note"].path) in paths
     assert all(not path.exists() for path in paths)
 
 

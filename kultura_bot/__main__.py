@@ -11,8 +11,8 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, Message
 from dotenv import load_dotenv
 
-from .media import DEFAULT_LOGO, MAX_DURATION, ROOT, SIZE, VARIANTS
-from .media import MediaError, check_tools, probe_video, render_variant
+from .media import DEFAULT_LOGO, MAX_DURATION, ROOT, SIZE
+from .media import MediaError, check_tools, probe_video, render
 
 
 logger = logging.getLogger(__name__)
@@ -74,13 +74,11 @@ def make_router(allowed_users: set[int]) -> Router:
                     info = await probe_video(source)
                     if info.duration > MAX_DURATION:
                         await message.reply("I will use the first 60 seconds, the video note duration limit.")
-                    for variant in VARIANTS:
-                        await status.edit_text(f"Adding the logo: {variant.label.lower()}…")
-                        rendered = await render_variant(source, DEFAULT_LOGO, work, variant, info)
-                        await message.reply_video_note(
-                            video_note=FSInputFile(rendered.path),
-                            duration=max(1, round(rendered.duration)), length=SIZE,
-                        )
+                    rendered = await render(source, DEFAULT_LOGO, work, info)
+                    await message.reply_video_note(
+                        video_note=FSInputFile(rendered),
+                        duration=max(1, round(min(info.duration, MAX_DURATION))), length=SIZE,
+                    )
                 await status.edit_text("Done.")
             except asyncio.CancelledError:
                 raise
