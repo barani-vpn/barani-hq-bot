@@ -8,21 +8,32 @@ use image::{GrayImage, Luma, Rgba, RgbaImage, imageops};
 use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestReplyExt;
-use teloxide::types::{FileMeta, InputFile};
+use teloxide::types::{FileMeta, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const LOGO: &[u8] = include_bytes!("../logos/kult.png");
+const LOGOS: [(&str, &[u8]); 10] = [
+    ("Культура", include_bytes!("../logos/kult.png")),
+    ("1+1", include_bytes!("../logos/1plus1.png")),
+    ("ICTV", include_bytes!("../logos/ictv.png")),
+    ("СТБ", include_bytes!("../logos/stb.png")),
+    ("Інтер", include_bytes!("../logos/inter.png")),
+    ("Новий канал", include_bytes!("../logos/novyi.png")),
+    ("Суспільне", include_bytes!("../logos/suspilne.png")),
+    ("BBC", include_bytes!("../logos/bbc.png")),
+    ("Fox News", include_bytes!("../logos/fox.png")),
+    ("InfoWars", include_bytes!("../logos/infowars.png")),
+];
 const SIZE: u32 = 640;
-const LOGO_FRACTION: f64 = 0.24;
+const LOGO_BOX: (f64, f64) = (0.24, 0.125);
 const MAX_DURATION: f64 = 60.0;
 const MAX_BYTES: u64 = 20_000_000;
 const VIDEO_EXTENSIONS: [&str; 6] = ["mp4", "mov", "mkv", "webm", "avi", "m4v"];
-const HELP: &str = "Send a video or video note. I will return a video note with the Kultura logo \
-    in the upper right, sized to 24% of the frame diameter.\n\n\
+const HELP: &str = "Send a video or video note, then pick a channel. I will return a video note \
+    with that channel's logo in the upper right.\n\n\
     You can also send a video as a file. The input limit is 20 MB. \
     Videos longer than one minute are trimmed to the first 60 seconds. \
     Rectangular videos are cropped to a square from the center.";
@@ -42,7 +53,12 @@ async fn main() -> Res<()> {
         let (video, dir) = (Path::new(&video), Path::new("output"));
         std::fs::create_dir_all(dir)?;
         let duration = probe(video).await?.min(MAX_DURATION);
-        println!("{}", render(video, dir, duration).await?.display());
+        for (logo, (label, _)) in LOGOS.iter().enumerate() {
+            println!(
+                "{label}: {}",
+                render(video, dir, duration, logo).await?.display()
+            );
+        }
         return Ok(());
     }
 
@@ -61,49 +77,82 @@ async fn main() -> Res<()> {
     let client = teloxide::net::default_reqwest_settings()
         .timeout(Duration::from_secs(120))
         .build()?;
-    let bot = Bot::with_client(token.trim(), client);
-    let (allowed, busy) = (Arc::new(allowed), Arc::new(Mutex::new(())));
-    teloxide::repl(bot, move |bot: Bot, msg: Message| {
-        handle(bot, msg, allowed.clone(), busy.clone())
-    })
-    .await;
+    let handler = dptree::entry()
+        .branch(Update::filter_message().endpoint(on_message))
+        .branch(Update::filter_callback_query().endpoint(on_choice));
+    Dispatcher::builder(Bot::with_client(token.trim(), client), handler)
+        .dependencies(dptree::deps![Arc::new(allowed), Arc::new(Mutex::new(()))])
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
     Ok(())
 }
 
-async fn handle(
+async fn on_message(bot: Bot, msg: Message, allowed: Arc<HashSet<u64>>) -> ResponseResult<()> {
+    let reply = match video_or_reply(&msg, &allowed) {
+        Ok(_) => {
+            let buttons: Vec<_> = LOGOS
+                .iter()
+                .enumerate()
+                .map(|(logo, (label, _))| InlineKeyboardButton::callback(*label, logo.to_string()))
+                .collect();
+            bot.send_message(msg.chat.id, "Which channel?")
+                .reply_markup(InlineKeyboardMarkup::new(
+                    buttons.chunks(2).map(<[_]>::to_vec),
+                ))
+        }
+        Err(text) => bot.send_message(msg.chat.id, text),
+    };
+    reply.reply_to(msg.id).await?;
+    Ok(())
+}
+
+async fn on_choice(
     bot: Bot,
-    msg: Message,
+    query: CallbackQuery,
     allowed: Arc<HashSet<u64>>,
     busy: Arc<Mutex<()>>,
 ) -> ResponseResult<()> {
-    let file = match video_or_reply(&msg, &allowed) {
-        Ok(file) => file,
-        Err(text) => {
-            bot.send_message(msg.chat.id, text).reply_to(msg.id).await?;
-            return Ok(());
-        }
-    };
-    let Ok(_processing) = busy.try_lock() else {
-        bot.send_message(
-            msg.chat.id,
-            "I am processing another video. Please send yours again shortly.",
-        )
-        .reply_to(msg.id)
-        .await?;
+    let logo = query
+        .data
+        .as_deref()
+        .and_then(|data| data.parse::<usize>().ok())
+        .filter(|&logo| logo < LOGOS.len());
+    let prompt = query.regular_message();
+    let original = prompt
+        .and_then(Message::reply_to_message)
+        .filter(|original| original.from.as_ref().map(|user| user.id) == Some(query.from.id));
+    let file = original.and_then(|original| video_or_reply(original, &allowed).ok());
+    let (Some(logo), Some(prompt), Some(original), Some(file)) = (logo, prompt, original, file)
+    else {
+        bot.answer_callback_query(query.id.clone())
+            .text("Only the sender of the video can pick, and only while the video is still there.")
+            .await?;
         return Ok(());
     };
-    let status = bot
-        .send_message(msg.chat.id, "Preparing your video note with the logo…")
-        .reply_to(msg.id)
+    let Ok(_processing) = busy.try_lock() else {
+        bot.answer_callback_query(query.id.clone())
+            .text("I am processing another video. Tap again shortly.")
+            .await?;
+        return Ok(());
+    };
+    bot.answer_callback_query(query.id.clone()).await?;
+    let status = format!("Adding the {} logo…", LOGOS[logo].0);
+    bot.edit_message_text(prompt.chat.id, prompt.id, status)
         .await?;
-    let text = match process(&bot, &msg, file).await {
+    let text = match process(&bot, original, file, logo).await {
         Ok(()) => "Done.",
         Err(error) => {
-            log::error!("video processing failed for message {}: {error}", msg.id);
+            log::error!(
+                "video processing failed for message {}: {error}",
+                original.id
+            );
             "Could not process or send the video. Try an MP4 file under 20 MB. Error details are in the bot console."
         }
     };
-    bot.edit_message_text(msg.chat.id, status.id, text).await?;
+    bot.edit_message_text(prompt.chat.id, prompt.id, text)
+        .await?;
     Ok(())
 }
 
@@ -156,7 +205,7 @@ fn video_or_reply<'a>(
     Ok(file)
 }
 
-async fn process(bot: &Bot, msg: &Message, file: &FileMeta) -> Res<()> {
+async fn process(bot: &Bot, msg: &Message, file: &FileMeta, logo: usize) -> Res<()> {
     let dir = tempfile::Builder::new().prefix("kultura-").tempdir()?;
     let source = dir.path().join("input-video");
     let remote = bot.get_file(file.id.clone()).await?;
@@ -176,7 +225,7 @@ async fn process(bot: &Bot, msg: &Message, file: &FileMeta) -> Res<()> {
         .await?;
     }
     let duration = duration.min(MAX_DURATION);
-    let output = render(&source, dir.path(), duration).await?;
+    let output = render(&source, dir.path(), duration, logo).await?;
     bot.send_video_note(msg.chat.id, InputFile::file(output))
         .duration(duration.round().max(1.0) as u32)
         .length(SIZE)
@@ -237,18 +286,20 @@ async fn probe(source: &Path) -> Res<f64> {
     }
 }
 
-fn prepare_overlay(destination: &Path) -> Res<(u32, u32)> {
-    let mut logo = image::load_from_memory(LOGO)?.into_rgba8();
+fn prepare_overlay(png: &[u8], destination: &Path) -> Res<(u32, u32)> {
+    let mut logo = image::load_from_memory(png)?.into_rgba8();
     for pixel in logo.pixels_mut() {
         let alpha = u16::from(pixel[3]);
         for channel in &mut pixel.0[..3] {
             *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
         }
     }
-    let width = (f64::from(SIZE) * LOGO_FRACTION).round() as u32 * 2;
-    let height =
-        (f64::from(width) * f64::from(logo.height()) / f64::from(logo.width())).round() as u32;
-    let mut logo = imageops::resize(&logo, width, height.max(1), imageops::FilterType::Lanczos3);
+    let fit =
+        |fraction: f64, side: u32| (f64::from(SIZE) * fraction).round() * 2.0 / f64::from(side);
+    let scale = fit(LOGO_BOX.0, logo.width()).min(fit(LOGO_BOX.1, logo.height()));
+    let scaled = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
+    let (width, height) = (scaled(logo.width()), scaled(logo.height()));
+    let mut logo = imageops::resize(&logo, width, height, imageops::FilterType::Lanczos3);
     for pixel in logo.pixels_mut() {
         let alpha = u16::from(pixel[3]);
         for channel in &mut pixel.0[..3] {
@@ -289,10 +340,10 @@ fn prepare_overlay(destination: &Path) -> Res<(u32, u32)> {
     ))
 }
 
-async fn render(source: &Path, dir: &Path, duration: f64) -> Res<PathBuf> {
-    let overlay = dir.join("logo.png");
-    let (x, y) = prepare_overlay(&overlay)?;
-    let output = dir.join("kultura.mp4");
+async fn render(source: &Path, dir: &Path, duration: f64, logo: usize) -> Res<PathBuf> {
+    let overlay = dir.join(format!("logo-{logo}.png"));
+    let (x, y) = prepare_overlay(LOGOS[logo].1, &overlay)?;
+    let output = dir.join(format!("{logo}.mp4"));
     let filters = format!(
         "[0:V:0]setpts=PTS-STARTPTS,\
          scale=1280:1280:force_original_aspect_ratio=increase:flags=lanczos,\
@@ -424,7 +475,7 @@ mod tests {
             "aac",
             source.to_str().unwrap(),
         ]);
-        let output = render(&source, dir.path(), 0.7).await.unwrap();
+        let output = render(&source, dir.path(), 0.7, 0).await.unwrap();
 
         let info = streams(&output);
         for want in [
@@ -494,7 +545,7 @@ mod tests {
                 "libx264",
                 source.to_str().unwrap(),
             ]);
-            let output = render(&source, dir.path(), probe(&source).await.unwrap())
+            let output = render(&source, dir.path(), probe(&source).await.unwrap(), 0)
                 .await
                 .unwrap();
             let info = streams(&output);
@@ -507,24 +558,30 @@ mod tests {
     }
 
     #[test]
-    fn overlay_is_antialiased_and_inside_circle() {
-        let logo = image::load_from_memory(LOGO).unwrap().into_rgba8();
-        assert_eq!(
-            (logo.get_pixel(10, 10)[3], logo.get_pixel(20, 10)[3]),
-            (0, 0)
-        );
-        assert!(logo.get_pixel(700, 30)[3] > 200);
-
+    fn every_logo_is_transparent_antialiased_and_inside_circle() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("logo.png");
-        let (x, y) = prepare_overlay(&path).unwrap();
-        let overlay = image::open(&path).unwrap().into_rgba8();
-        let (w, h, center) = (overlay.width(), overlay.height(), f64::from(SIZE));
-        for (px, py) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
-            assert!((f64::from(px) - center).hypot(f64::from(py) - center) <= center * 0.96);
+        for (label, png) in LOGOS {
+            let logo = image::load_from_memory(png).unwrap().into_rgba8();
+            assert!(
+                logo.pixels().any(|pixel| pixel[3] == 0),
+                "{label} has no transparency"
+            );
+            assert!(
+                logo.pixels().any(|pixel| pixel[3] > 200),
+                "{label} is invisible"
+            );
+
+            let path = dir.path().join("logo.png");
+            let (x, y) = prepare_overlay(png, &path).unwrap();
+            let overlay = image::open(&path).unwrap().into_rgba8();
+            let (w, h, center) = (overlay.width(), overlay.height(), f64::from(SIZE));
+            for (px, py) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
+                let distance = (f64::from(px) - center).hypot(f64::from(py) - center);
+                assert!(distance <= center * 0.96, "{label} leaves the circle");
+            }
+            assert!(overlay.pixels().any(|pixel| (1..255).contains(&pixel[3])));
+            assert_eq!(overlay.get_pixel(0, 0)[3], 0);
         }
-        assert!(overlay.pixels().any(|pixel| (1..255).contains(&pixel[3])));
-        assert_eq!(overlay.get_pixel(0, 0)[3], 0);
     }
 
     #[tokio::test]
