@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const LOGOS: [(&str, &[u8]); 10] = [
+const LOGOS: [(&str, &[u8]); 13] = [
     ("Культура", include_bytes!("../logos/kult.png")),
     ("1+1", include_bytes!("../logos/1plus1.png")),
     ("ICTV", include_bytes!("../logos/ictv.png")),
@@ -26,6 +26,9 @@ const LOGOS: [(&str, &[u8]); 10] = [
     ("BBC", include_bytes!("../logos/bbc.png")),
     ("Fox News", include_bytes!("../logos/fox.png")),
     ("InfoWars", include_bytes!("../logos/infowars.png")),
+    ("Channel 4", include_bytes!("../logos/channel4.png")),
+    ("Moldova 1", include_bytes!("../logos/moldova1.png")),
+    ("Додо Пицца", include_bytes!("../logos/dodo.png")),
 ];
 const SIZE: u32 = 640;
 const LOGO_BOX: (f64, f64) = (0.24, 0.125);

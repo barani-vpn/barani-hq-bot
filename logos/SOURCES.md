@@ -9,3 +9,6 @@ Trimmed and resized from Wikimedia Commons:
 - bbc.png: https://commons.wikimedia.org/wiki/File:BBC_Logo_2021.svg (public domain)
 - fox.png: https://commons.wikimedia.org/wiki/File:Fox_News_Channel_logo.svg (public domain)
 - infowars.png: https://commons.wikimedia.org/wiki/File:Infowars_Logo.svg (public domain)
+- channel4.png: https://commons.wikimedia.org/wiki/File:Channel_4_HD_2022.svg, "HD" cropped (CC BY 4.0)
+- moldova1.png: https://commons.wikimedia.org/wiki/File:TV_Moldova_1_2025.svg (public domain)
+- dodo.png: https://commons.wikimedia.org/wiki/File:Dodo_Pizza_Wordmark_Russian.svg (public domain)
